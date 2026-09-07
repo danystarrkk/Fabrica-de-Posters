@@ -1,0 +1,54 @@
+---
+job: extension
+config:
+  name: "t3chgrng_lora"
+  process:
+    - type: 'sd_trainer'
+      training_folder: "output"
+      device: cuda:0
+      
+      # 1. Arquitectura del LoRA
+      network:
+        type: "lora"
+        linear: 128
+        linear_alpha: 64
+        
+      # 2. Guardado por etapas (Crucial para no quemar el modelo)
+      save:
+        dtype: float16 
+        save_every: 250
+        max_step_saves_to_keep: 8
+        
+      # 3. Tu Dataset
+      datasets:
+        - folder_path: "/ruta/absoluta/a/tu/dataset_t3chgrng" # <-- ¡CAMBIA ESTO!
+          caption_ext: "txt"
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [1024, 1024]
+          
+      # 4. Parámetros de Entrenamiento
+      train:
+        batch_size: 1
+        steps: 2500
+        gradient_accumulation_steps: 2
+        train_unet: true
+        train_text_encoder: false # Flux es demasiado pesado para entrenar esto
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "prodigy"
+        lr: 1.0 # Prodigy exige que empiece en 1.0 (él lo ajusta solo)
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+        dtype: bf16
+        
+      # 5. El Modelo Base (Flux.1 Dev)
+      model:
+        name_or_path: "black-forest-labs/FLUX.2-dev"
+        is_flux: true
+        quantize: true # Evita que colapse la VRAM de la GPU
+meta:
+  name: "t3chgrng_lora"
+  version: '1.0'
