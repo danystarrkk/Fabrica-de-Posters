@@ -210,6 +210,10 @@ class ComfyUIInstaller:
                 print(f"  [{spec.key}] ya presente. Saltando.")
                 continue
             spec.target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Limpiar locks stale de descargas anteriores interrumpidas
+            self._clean_hf_locks(spec.target_dir)
+
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
             self._run_streaming(
                 [
@@ -222,6 +226,17 @@ class ComfyUIInstaller:
                     str(spec.target_dir),
                 ]
             )
+
+    def _clean_hf_locks(self, target_dir: Path) -> None:
+        """Elimina archivos .lock stale en el cache de HF dentro de target_dir."""
+        cache_dir = target_dir / ".cache" / "huggingface" / "download"
+        if cache_dir.exists():
+            for lock_file in cache_dir.rglob("*.lock"):
+                try:
+                    lock_file.unlink()
+                    print(f"  [cleanup] Lock stale eliminado: {lock_file.name}")
+                except OSError:
+                    pass
 
     # --------------------------------------------------------- orchestration
     def run(self) -> None:
