@@ -76,8 +76,8 @@ config:
         content_or_style: "balanced"
         optimizer_params:
           weight_decay: 0.0001
-        unload_text_encoder: false
-        cache_text_embeddings: false
+        unload_text_encoder: true      # <--- ¡NUEVO! Borra el TE después de leer textos
+        cache_text_embeddings: true    # <--- ¡NUEVO! Guarda los textos para no volver a cargar Mistral
         lr: 1.0
         ema_config:
           use_ema: true
@@ -105,9 +105,9 @@ config:
         model_kwargs:
           match_target_res: false
         compile: false
-        layer_offloading: false
-        layer_offloading_text_encoder_percent: 0
-        layer_offloading_transformer_percent: 0
+        layer_offloading: true                         # <--- ¡NUEVO! Activa offloading
+        layer_offloading_text_encoder_percent: 1       # <--- ¡NUEVO! Envía Mistral (el Text Encoder) 100% a la CPU
+        layer_offloading_transformer_percent: 0        # Flux2 se queda 100% en la GPU
       sample:
         sampler: "flowmatch"
         sample_every: 250
@@ -130,6 +130,4 @@ meta:
 with open("config.yaml", "w", encoding="utf-8") as f:
     f.write(yaml_content)
 
-print(
-    f"\\n[ÉXITO] Archivo 'config.yaml' generado. ¡Restricciones de memoria meta desactivadas!"
-)
+print(f"\\n[ÉXITO] Archivo 'config.yaml' con Caché y CPU Offloading generado.")
