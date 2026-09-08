@@ -194,27 +194,52 @@ class ComfyUIInstaller:
 
         hf_cmd = _hf_cmd()
         for spec in get_required_models():
-            # Verificar si necesita descarga (no existe o es demasiado pequeño)
-            if not spec.should_download():
+            # Verificar estado del archivo
+            needs_download, reason = self._check_model_status(spec)
+            
+            if not needs_download:
                 size_mb = spec.target_path.stat().st_size / (1024**2)
                 print(f"  [{spec.key}] ya presente ({size_mb:.0f} MB). Saltando.")
                 continue
 
-            spec.target_dir.mkdir(parents=True, exist_ok=True)
+            # Mostrar info y preguntar al usuario
+            expected_gb = spec.expected_size_bytes / (1024**3)
+            if spec.target_path.exists():
+                current_mb = spec.target_path.stat().st_size / (1024**2)
+                print(f"\n  [{spec.key}] {spec.filename}")
+                print(f"    Estado: {reason}")
+                print(f"    Tamaño actual: {current_mb:.0f} MB | Esperado: ~{expected_gb:.1f} GB")
+            else:
+                print(f"\n  [{spec.key}] {spec.filename}")
+                print(f"    Estado: {reason}")
+                print(f"    Tamaño esperado: ~{expected_gb:.1f} GB")
 
-            # Limpiar locks stale de descargas anteriores interrumpidas
+            # Prompt interactivo
+            while True:
+                choice = input(f"    ¿Descargar este modelo? [s/N]: ").strip().lower()
+                if choice in ('s', 'si', 'sí', 'y', 'yes'):
+                    break
+                elif choice in ('n', 'no', ''):
+                    print(f"    Saltando {spec.key}.")
+                    break
+                else:
+                    print(f"    Respuesta no válida. Use 's' para sí o 'n' para no.")
+
+            if choice in ('n', 'no', ''):
+                continue  # Pasar al siguiente modelo
+
+            # Preparar directorio y limpiar locks
+            spec.target_dir.mkdir(parents=True, exist_ok=True)
             self._clean_hf_locks(spec.target_dir)
 
-            # Si existe archivo incompleto, eliminarlo antes de reintentar
+            # Si existe archivo incompleto, eliminarlo
             if spec.target_path.exists():
-                incomplete_size = spec.target_path.stat().st_size / (1024**2)
-                print(f"  [{spec.key}] archivo incompleto ({incomplete_size:.0f} MB). Eliminando...")
                 try:
                     spec.target_path.unlink()
                 except OSError as e:
-                    print(f"  [WARN] No se pudo eliminar archivo incompleto: {e}")
+                    print(f"  [WARN] No se pudo eliminar archivo previo: {e}")
 
-            print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
+            # Descargar con streaming
             cmd = [
                 *hf_cmd,
                 "download",
@@ -225,12 +250,14 @@ class ComfyUIInstaller:
                 str(spec.target_dir),
             ]
             print(f"  $ {' '.join(cmd)}")
+            
+            try:
+                self._run_download_streaming(cmd)
+            except RuntimeError as e:
+                print(f"  [ERROR] Falló la descarga de {spec.key}: {e}")
+                continue
 
-            if not self._run_download_with_interrupt(cmd, spec):
-                # KeyboardInterrupt detectado - ya limpiado en _run_download_with_interrupt
-                continue  # Pasar al siguiente modelo
-
-            # Verificar tamaño tras descarga exitosa
+            # Verificar tamaño tras descarga
             if spec.target_path.exists():
                 actual_size = spec.target_path.stat().st_size
                 if spec.is_valid_size(actual_size):
@@ -240,55 +267,51 @@ class ComfyUIInstaller:
                     size_mb = actual_size / (1024**2)
                     print(f"  [WARN] {spec.key}: tamaño inesperado ({size_mb:.0f} MB), esperado ~{spec.expected_size_bytes/(1024**2):.0f} MB")
 
-    def _run_download_with_interrupt(self, cmd: list[str], spec) -> bool:
-        """Ejecuta descarga con Popen y manejo correcto de Ctrl+C por archivo.
+    def _check_model_status(self, spec) -> tuple[bool, str]:
+        """Verifica si un modelo necesita descarga.
         
         Returns:
-            True si la descarga completó (exit code 0)
-            False si fue interrumpida por KeyboardInterrupt
+            (needs_download: bool, reason: str)
         """
-        import signal
+        if not spec.target_path.exists():
+            return True, "archivo no existe"
         
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+        actual_size = spec.target_path.stat().st_size
+        if not spec.is_valid_size(actual_size):
+            if actual_size < spec.expected_size_bytes * 0.1:
+                return True, "archivo muy pequeño (posible descarga corrupta)"
+            else:
+                return True, "archivo incompleto"
+        
+        return False, "completo y verificado"
+
+    def _run_download_streaming(self, cmd: list[str]) -> None:
+        """Ejecuta descarga con streaming de salida (sin manejo de señales).
+        
+        El usuario puede interrumpir con Ctrl+C que terminará el proceso hijo
+        y propagará la excepción hacia arriba.
+        """
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, bufsize=1, universal_newlines=True)
         
-        interrupted = False
-        
-        def signal_handler(signum, frame):
-            nonlocal interrupted
-            interrupted = True
-            print(f"\n  [INTERRUMPIDO] {spec.key}: Ctrl+C detectado. Terminando descarga...")
-            proc.send_signal(signal.SIGINT)
-        
-        # Guardar handler original
-        original_handler = signal.signal(signal.SIGINT, signal_handler)
-        
         try:
-            # Leer salida línea por línea (streaming)
             for line in proc.stdout:
                 print(line, end="")
-            
-            # Esperar a que termine
             returncode = proc.wait()
-            
-            if interrupted:
-                # Limpiar archivo parcial
-                if spec.target_path.exists():
-                    try:
-                        spec.target_path.unlink()
-                        print(f"  [cleanup] Archivo parcial eliminado: {spec.filename}")
-                    except OSError:
-                        pass
-                return False
-            
             if returncode != 0:
                 raise RuntimeError(f"Descarga falló (exit code {returncode})")
-            
-            return True
-            
+        except KeyboardInterrupt:
+            print(f"\n  [INTERRUMPIDO] Descarga cancelada por usuario.")
+            proc.send_signal(subprocess.signal.SIGINT)
+            proc.wait()
+            # Limpiar archivo parcial
+            # (el llamador verificará y limpiará si hace falta en la siguiente iteración)
+            raise
         finally:
-            # Restaurar handler original
-            signal.signal(signal.SIGINT, original_handler)
+            # Asegurar que el proceso termina
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=5)
 
     def _clean_hf_locks(self, target_dir: Path) -> None:
         """Elimina archivos .lock stale en el cache de HF dentro de target_dir."""
