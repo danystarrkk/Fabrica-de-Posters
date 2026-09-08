@@ -206,26 +206,59 @@ class ComfyUIInstaller:
 
         hf_cmd = _hf_cmd()
         for spec in get_required_models():
-            if spec.target_path.exists():
-                print(f"  [{spec.key}] ya presente. Saltando.")
+            # Verificar si necesita descarga (no existe o es demasiado pequeño)
+            if not spec.should_download():
+                size_mb = spec.target_path.stat().st_size / (1024**2)
+                print(f"  [{spec.key}] ya presente ({size_mb:.0f} MB). Saltando.")
                 continue
+
             spec.target_dir.mkdir(parents=True, exist_ok=True)
 
             # Limpiar locks stale de descargas anteriores interrumpidas
             self._clean_hf_locks(spec.target_dir)
 
+            # Si existe archivo incompleto, eliminarlo antes de reintentar
+            if spec.target_path.exists():
+                incomplete_size = spec.target_path.stat().st_size / (1024**2)
+                print(f"  [{spec.key}] archivo incompleto ({incomplete_size:.0f} MB). Eliminando...")
+                try:
+                    spec.target_path.unlink()
+                except OSError as e:
+                    print(f"  [WARN] No se pudo eliminar archivo incompleto: {e}")
+
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
-            self._run_streaming(
-                [
-                    *hf_cmd,
-                    "download",
-                    spec.repo_id,
-                    "--include",
-                    spec.filename,
-                    "--local-dir",
-                    str(spec.target_dir),
-                ]
-            )
+            try:
+                self._run_streaming(
+                    [
+                        *hf_cmd,
+                        "download",
+                        spec.repo_id,
+                        "--include",
+                        spec.filename,
+                        "--local-dir",
+                        str(spec.target_dir),
+                    ]
+                )
+            except KeyboardInterrupt:
+                print(f"\n  [INTERRUMPIDO] {spec.key}: Ctrl+C detectado. Saltando al siguiente modelo...")
+                # Limpiar archivo parcial si quedó
+                if spec.target_path.exists():
+                    try:
+                        spec.target_path.unlink()
+                        print(f"  [cleanup] Archivo parcial eliminado: {spec.filename}")
+                    except OSError:
+                        pass
+                continue  # Pasar al siguiente modelo
+
+            # Verificar tamaño tras descarga exitosa
+            if spec.target_path.exists():
+                actual_size = spec.target_path.stat().st_size
+                if spec.is_valid_size(actual_size):
+                    size_mb = actual_size / (1024**2)
+                    print(f"  [{spec.key}] verificado OK ({size_mb:.0f} MB)")
+                else:
+                    size_mb = actual_size / (1024**2)
+                    print(f"  [WARN] {spec.key}: tamaño inesperado ({size_mb:.0f} MB), esperado ~{spec.expected_size_bytes/(1024**2):.0f} MB")
 
     def _clean_hf_locks(self, target_dir: Path) -> None:
         """Elimina archivos .lock stale en el cache de HF dentro de target_dir."""
