@@ -96,18 +96,18 @@ config:
         use_ui_logger: true
       model:
         name_or_path: "black-forest-labs/FLUX.2-dev"
-        quantize: true
+        quantize: false
         qtype: "qfloat8"
-        quantize_te: true
+        quantize_te: false
         qtype_te: "qfloat8"
         arch: "flux2"
-        low_vram: true
+        low_vram: false
         model_kwargs:
           match_target_res: false
         compile: false
         layer_offloading: false
-        layer_offloading_text_encoder_percent: 1
-        layer_offloading_transformer_percent: 1
+        layer_offloading_text_encoder_percent: 0
+        layer_offloading_transformer_percent: 0
       sample:
         sampler: "flowmatch"
         sample_every: 250
@@ -130,4 +130,6 @@ meta:
 with open("config.yaml", "w", encoding="utf-8") as f:
     f.write(yaml_content)
 
-print(f"\\n[ÉXITO] Archivo 'config.yaml' generado con la estructura estricta de la UI.")
+print(
+    f"\\n[ÉXITO] Archivo 'config.yaml' generado. ¡Restricciones de memoria meta desactivadas!"
+)
