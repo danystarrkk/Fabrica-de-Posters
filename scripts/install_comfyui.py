@@ -68,18 +68,6 @@ class ComfyUIInstaller:
             )
         return proc
 
-    def _run_streaming(self, cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
-        """Ejecuta comando SIN capturar salida (stdout/stderr van directo a terminal).
-        Útil para descargas donde queremos ver la barra de progreso en tiempo real.
-        """
-        print(f"  $ {' '.join(cmd)}")
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=False, text=True)
-        if check and proc.returncode != 0:
-            raise RuntimeError(
-                f"Comando falló ({proc.returncode}): {' '.join(cmd)}"
-            )
-        return proc
-
     def _venv_pip(self) -> list[str]:
         return [str(self.venv_python), "-m", "pip"]
 
@@ -227,27 +215,19 @@ class ComfyUIInstaller:
                     print(f"  [WARN] No se pudo eliminar archivo incompleto: {e}")
 
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
-            try:
-                self._run_streaming(
-                    [
-                        *hf_cmd,
-                        "download",
-                        spec.repo_id,
-                        "--include",
-                        spec.filename,
-                        "--local-dir",
-                        str(spec.target_dir),
-                    ]
-                )
-            except KeyboardInterrupt:
-                print(f"\n  [INTERRUMPIDO] {spec.key}: Ctrl+C detectado. Saltando al siguiente modelo...")
-                # Limpiar archivo parcial si quedó
-                if spec.target_path.exists():
-                    try:
-                        spec.target_path.unlink()
-                        print(f"  [cleanup] Archivo parcial eliminado: {spec.filename}")
-                    except OSError:
-                        pass
+            cmd = [
+                *hf_cmd,
+                "download",
+                spec.repo_id,
+                "--include",
+                spec.filename,
+                "--local-dir",
+                str(spec.target_dir),
+            ]
+            print(f"  $ {' '.join(cmd)}")
+
+            if not self._run_download_with_interrupt(cmd, spec):
+                # KeyboardInterrupt detectado - ya limpiado en _run_download_with_interrupt
                 continue  # Pasar al siguiente modelo
 
             # Verificar tamaño tras descarga exitosa
@@ -259,6 +239,56 @@ class ComfyUIInstaller:
                 else:
                     size_mb = actual_size / (1024**2)
                     print(f"  [WARN] {spec.key}: tamaño inesperado ({size_mb:.0f} MB), esperado ~{spec.expected_size_bytes/(1024**2):.0f} MB")
+
+    def _run_download_with_interrupt(self, cmd: list[str], spec) -> bool:
+        """Ejecuta descarga con Popen y manejo correcto de Ctrl+C por archivo.
+        
+        Returns:
+            True si la descarga completó (exit code 0)
+            False si fue interrumpida por KeyboardInterrupt
+        """
+        import signal
+        
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                 text=True, bufsize=1, universal_newlines=True)
+        
+        interrupted = False
+        
+        def signal_handler(signum, frame):
+            nonlocal interrupted
+            interrupted = True
+            print(f"\n  [INTERRUMPIDO] {spec.key}: Ctrl+C detectado. Terminando descarga...")
+            proc.send_signal(signal.SIGINT)
+        
+        # Guardar handler original
+        original_handler = signal.signal(signal.SIGINT, signal_handler)
+        
+        try:
+            # Leer salida línea por línea (streaming)
+            for line in proc.stdout:
+                print(line, end="")
+            
+            # Esperar a que termine
+            returncode = proc.wait()
+            
+            if interrupted:
+                # Limpiar archivo parcial
+                if spec.target_path.exists():
+                    try:
+                        spec.target_path.unlink()
+                        print(f"  [cleanup] Archivo parcial eliminado: {spec.filename}")
+                    except OSError:
+                        pass
+                return False
+            
+            if returncode != 0:
+                raise RuntimeError(f"Descarga falló (exit code {returncode})")
+            
+            return True
+            
+        finally:
+            # Restaurar handler original
+            signal.signal(signal.SIGINT, original_handler)
 
     def _clean_hf_locks(self, target_dir: Path) -> None:
         """Elimina archivos .lock stale en el cache de HF dentro de target_dir."""
