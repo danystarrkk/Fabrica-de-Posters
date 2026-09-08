@@ -11,6 +11,7 @@ Estructura (programación orientada a objetos):
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -55,9 +56,11 @@ class Menu:
 class Orchestrator:
     """Panel de control que delega cada acción a un script de `scripts/`."""
 
-    def __init__(self) -> None:
+    def __init__(self, cli_args: argparse.Namespace | None = None) -> None:
         # Asegura que `scripts/` sea importable desde main.py.
         sys.path.insert(0, str(SCRIPTS_DIR))
+
+        self.cli_args = cli_args or argparse.Namespace()
 
         self.main_menu = Menu(
             "Panel de Control AI",
@@ -79,13 +82,17 @@ class Orchestrator:
             return
         subprocess.run([sys.executable, str(script), *args], check=False)
 
+    def _comfy_root(self) -> Path:
+        return Path(getattr(self.cli_args, "root", None) or Path.home() / "ComfyUI")
+
+    def _token(self) -> str | None:
+        # Prioridad: CLI arg > env var (se resuelve en install_comfyui)
+        return getattr(self.cli_args, "token", None)
+
     def install_comfy(self) -> None:
         print("\n[+] Instalando y configurando ComfyUI...")
-        # Lógica delegada al script; el token se resuelve vía HF_TOKEN o input.
-        from huggingface_setup import get_token_from_env  # noqa: F401  (import local)
-
-        token = get_token_from_env()
-        args = ["--root", str(Path.home() / "ComfyUI")]
+        args = ["--root", str(self._comfy_root())]
+        token = self._token()
         if token:
             args += ["--token", token]
         self._run_script("install_comfyui.py", *args)
@@ -116,5 +123,25 @@ class Orchestrator:
             self.exit_app()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Panel de Control AI — Fábrica de Posters",
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Ruta de instalación de ComfyUI (default ~/ComfyUI).",
+    )
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=None,
+        help="Token de Hugging Face (alternativa a HF_TOKEN).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    Orchestrator().start()
+    Orchestrator(parse_args()).start()
