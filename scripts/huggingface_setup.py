@@ -36,11 +36,19 @@ def get_token_from_env() -> str | None:
     return os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
 
 
-def _pip_for(python: str | None) -> str:
-    """Devuelve el ejecutable pip correspondiente al python indicado."""
+def _pip_cmd(python: str | None) -> list[str]:
+    """Devuelve el comando pip como lista de partes para subprocess."""
     if python:
-        return str(Path(python).resolve().parent / "pip")
-    return sys.executable.replace("python", "pip") if "python" in sys.executable else "pip"
+        python_path = Path(python).resolve()
+        if not python_path.exists():
+            raise HuggingFaceSetupError(f"Python del venv no encontrado: {python_path}")
+        pip_path = python_path.parent / "pip"
+        if pip_path.exists():
+            return [str(pip_path)]
+        # Fallback: python -m pip
+        return [str(python_path), "-m", "pip"]
+    # Sin python específico: usar el pip del sistema actual
+    return [sys.executable, "-m", "pip"]
 
 
 def _resolve_venv_bin(python: str | None, bin_name: str) -> Path | None:
@@ -95,17 +103,42 @@ def _find_huggingface_cli(python: str | None) -> list[str]:
 
 
 def install_huggingface_cli(python: str | None = None) -> None:
-    """Instala `huggingface_hub` con pip dentro del entorno indicado."""
-    pip = _pip_for(python)
+    """Instala `huggingface_hub` con pip dentro del entorno indicado y verifica el binario."""
+    pip_cmd = _pip_cmd(python)
+    
+    # Forzar reinstalación para asegurar que los entry points se creen
     proc = subprocess.run(
-        [pip, "install", "--upgrade", "huggingface_hub"],
+        [*pip_cmd, "install", "--force-reinstall", "--no-deps", "huggingface_hub"],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
-        raise HuggingFaceSetupError(
-            f"Fallo instalando huggingface_hub: {proc.stderr.strip()}"
+        # Fallback: instalación normal si falla --force-reinstall
+        proc = subprocess.run(
+            [*pip_cmd, "install", "--upgrade", "huggingface_hub"],
+            capture_output=True,
+            text=True,
         )
+        if proc.returncode != 0:
+            raise HuggingFaceSetupError(
+                f"Fallo instalando huggingface_hub: {proc.stderr.strip()}"
+            )
+    
+    # VERIFICAR que el binario quedó creado en el venv
+    if python:
+        cli_path = _resolve_venv_bin(python, "huggingface-cli")
+        if not cli_path:
+            # Intentar regenerar entry points
+            subprocess.run(
+                [*pip_cmd, "install", "--force-reinstall", "huggingface_hub"],
+                capture_output=True,
+            )
+            cli_path = _resolve_venv_bin(python, "huggingface-cli")
+            if not cli_path:
+                raise HuggingFaceSetupError(
+                    "huggingface_hub se instaló pero NO se creó el binario huggingface-cli en el venv. "
+                    "Verifica que pip esté instalando en el venv correcto."
+                )
 
 
 def persist_token(token: str, python: str | None = None) -> Path:
