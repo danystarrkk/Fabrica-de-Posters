@@ -39,7 +39,6 @@ def get_token_from_env() -> str | None:
 def _pip_for(python: str | None) -> str:
     """Devuelve el ejecutable pip correspondiente al python indicado."""
     if python:
-        # python es la ruta al binario python del venv
         return str(Path(python).resolve().parent / "pip")
     return sys.executable.replace("python", "pip") if "python" in sys.executable else "pip"
 
@@ -59,19 +58,34 @@ def _find_huggingface_cli(python: str | None) -> list[str]:
     """Devuelve el comando para invocar huggingface-cli de forma robusta.
 
     Orden de preferencia:
-      1. Binario directo en el venv (huggingface-cli)
-      2. Módulo via python -m huggingface_hub.commands.huggingface_cli (siempre funciona si el pkg está instalado)
+      1. Binario directo en el venv (huggingface-cli) - LO QUE PIP INSTALA
+      2. python -m huggingface_hub (versiones nuevas con __main__)
+      3. python -m huggingface_hub.cli (versiones intermedias)
     """
-    # 1. Intentar binario en venv
+    # 1. PRIORIDAD MÁXIMA: binario que pip instala en el venv
     cli_path = _resolve_venv_bin(python, "huggingface-cli")
     if cli_path:
         return [str(cli_path)]
 
-    # 2. Fallback: usar python -m huggingface_hub.commands.huggingface_cli
+    # Si tenemos python del venv, intentamos invocar el módulo de varias formas
     if python:
-        return [python, "-m", "huggingface_hub.commands.huggingface_cli"]
+        # 2. Versiones nuevas: huggingface_hub tiene __main__
+        probe = subprocess.run(
+            [python, "-m", "huggingface_hub", "--help"],
+            capture_output=True,
+        )
+        if probe.returncode == 0:
+            return [python, "-m", "huggingface_hub"]
 
-    # 3. Último recurso: confiar en PATH (solo si no hay venv)
+        # 3. Versiones intermedias: huggingface_hub.cli como módulo ejecutable
+        probe = subprocess.run(
+            [python, "-m", "huggingface_hub.cli", "--help"],
+            capture_output=True,
+        )
+        if probe.returncode == 0:
+            return [python, "-m", "huggingface_hub.cli"]
+
+    # 4. Último recurso: confiar en PATH (solo si no hay venv)
     if shutil.which("huggingface-cli"):
         return ["huggingface-cli"]
 
