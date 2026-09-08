@@ -60,16 +60,16 @@ def _find_huggingface_cli(python: str | None) -> list[str]:
 
     Orden de preferencia:
       1. Binario directo en el venv (huggingface-cli)
-      2. Módulo via python -m huggingface_hub.cli (siempre funciona si el pkg está instalado)
+      2. Módulo via python -m huggingface_hub.commands.huggingface_cli (siempre funciona si el pkg está instalado)
     """
     # 1. Intentar binario en venv
     cli_path = _resolve_venv_bin(python, "huggingface-cli")
     if cli_path:
         return [str(cli_path)]
 
-    # 2. Fallback: usar python -m huggingface_hub.cli
+    # 2. Fallback: usar python -m huggingface_hub.commands.huggingface_cli
     if python:
-        return [python, "-m", "huggingface_hub.cli"]
+        return [python, "-m", "huggingface_hub.commands.huggingface_cli"]
 
     # 3. Último recurso: confiar en PATH (solo si no hay venv)
     if shutil.which("huggingface-cli"):
