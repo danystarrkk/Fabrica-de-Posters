@@ -59,11 +59,24 @@ class ComfyUIInstaller:
 
     # ------------------------------------------------------------------ util
     def _run(self, cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+        """Ejecuta comando capturando salida (para pasos donde no queremos ver ruido)."""
         print(f"  $ {' '.join(cmd)}")
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         if check and proc.returncode != 0:
             raise RuntimeError(
                 f"Comando falló ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
+            )
+        return proc
+
+    def _run_streaming(self, cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+        """Ejecuta comando SIN capturar salida (stdout/stderr van directo a terminal).
+        Útil para descargas donde queremos ver la barra de progreso en tiempo real.
+        """
+        print(f"  $ {' '.join(cmd)}")
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=False, text=True)
+        if check and proc.returncode != 0:
+            raise RuntimeError(
+                f"Comando falló ({proc.returncode}): {' '.join(cmd)}"
             )
         return proc
 
@@ -198,7 +211,7 @@ class ComfyUIInstaller:
                 continue
             spec.target_dir.mkdir(parents=True, exist_ok=True)
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
-            self._run(
+            self._run_streaming(
                 [
                     *hf_cmd,
                     "download",
