@@ -286,29 +286,35 @@ class ComfyUIInstaller:
         return False, "completo y verificado"
 
     def _run_download_streaming(self, cmd: list[str]) -> None:
-        """Ejecuta descarga con streaming de salida (sin manejo de señales).
+        """Ejecuta descarga con streaming de salida preservando barras de progreso (\r).
         
-        El usuario puede interrumpir con Ctrl+C que terminará el proceso hijo
-        y propagará la excepción hacia arriba.
+        Lee stdout en bruto (bytes) y escribe directo a sys.stdout.buffer para que
+        los carriage returns (\r) de la barra de progreso funcionen correctamente.
         """
+        import sys
+        
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, bufsize=1, universal_newlines=True)
+                                 bufsize=0)  # sin buffer para tiempo real
         
         try:
-            for line in proc.stdout:
-                print(line, end="")
+            # Leer byte a byte y escribir directo a stdout.buffer
+            while True:
+                chunk = proc.stdout.read(1024)
+                if not chunk:
+                    break
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+            
             returncode = proc.wait()
             if returncode != 0:
                 raise RuntimeError(f"Descarga falló (exit code {returncode})")
         except KeyboardInterrupt:
-            print(f"\n  [INTERRUMPIDO] Descarga cancelada por usuario.")
+            sys.stdout.write("\n  [INTERRUMPIDO] Descarga cancelada por usuario.\n")
+            sys.stdout.flush()
             proc.send_signal(subprocess.signal.SIGINT)
             proc.wait()
-            # Limpiar archivo parcial
-            # (el llamador verificará y limpiará si hace falta en la siguiente iteración)
             raise
         finally:
-            # Asegurar que el proceso termina
             if proc.poll() is None:
                 proc.terminate()
                 proc.wait(timeout=5)
