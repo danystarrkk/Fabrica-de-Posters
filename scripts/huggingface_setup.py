@@ -21,6 +21,7 @@ que las futuras descargas no vuelvan a pedirlo.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,50 @@ class HuggingFaceSetupError(RuntimeError):
 def get_token_from_env() -> str | None:
     """Lee el token de las variables de entorno conocidas, sin exponerlo."""
     return os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+
+
+def _pip_for(python: str | None) -> str:
+    """Devuelve el ejecutable pip correspondiente al python indicado."""
+    if python:
+        # python es la ruta al binario python del venv
+        return str(Path(python).resolve().parent / "pip")
+    return sys.executable.replace("python", "pip") if "python" in sys.executable else "pip"
+
+
+def _resolve_venv_bin(python: str | None, bin_name: str) -> Path | None:
+    """Resuelve la ruta a un binario dentro del venv, si python apunta al venv."""
+    if not python:
+        return None
+    try:
+        venv_bin = Path(python).resolve().parent / bin_name
+        return venv_bin if venv_bin.exists() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _find_huggingface_cli(python: str | None) -> list[str]:
+    """Devuelve el comando para invocar huggingface-cli de forma robusta.
+
+    Orden de preferencia:
+      1. Binario directo en el venv (huggingface-cli)
+      2. Módulo via python -m huggingface_hub.cli (siempre funciona si el pkg está instalado)
+    """
+    # 1. Intentar binario en venv
+    cli_path = _resolve_venv_bin(python, "huggingface-cli")
+    if cli_path:
+        return [str(cli_path)]
+
+    # 2. Fallback: usar python -m huggingface_hub.cli
+    if python:
+        return [python, "-m", "huggingface_hub.cli"]
+
+    # 3. Último recurso: confiar en PATH (solo si no hay venv)
+    if shutil.which("huggingface-cli"):
+        return ["huggingface-cli"]
+
+    raise HuggingFaceSetupError(
+        "No se encontró huggingface-cli. Asegúrate de instalar huggingface_hub en el venv."
+    )
 
 
 def install_huggingface_cli(python: str | None = None) -> None:
@@ -49,23 +94,16 @@ def install_huggingface_cli(python: str | None = None) -> None:
         )
 
 
-def _pip_for(python: str | None) -> str:
-    if python:
-        # Asume que el binario venv está en <python_dir>/pip
-        return str(Path(python).resolve().parent / "pip")
-    return sys.executable.replace("python", "pip") if "python" in sys.executable else "pip"
-
-
 def persist_token(token: str, python: str | None = None) -> Path:
     """Guarda el token con `huggingface-cli login` (no pasa por shell, sin log).
 
     Devuelve la ruta del archivo de token persistido.
-    Usamos el flag `--add-to-git-credential` para que el token quede disponible
+    Usa el flag `--add-to-git-credential` para que el token quede disponible
     de forma transparente para `hf download` sin reautenticación.
     """
-    cli = _cli_for(python)
+    cli_cmd = _find_huggingface_cli(python)
     proc = subprocess.run(
-        [cli, "login", "--token", token, "--add-to-git-credential"],
+        [*cli_cmd, "login", "--token", token, "--add-to-git-credential"],
         capture_output=True,
         text=True,
     )
@@ -74,12 +112,6 @@ def persist_token(token: str, python: str | None = None) -> Path:
             f"No se pudo registrar el token: {proc.stderr.strip() or proc.stdout.strip()}"
         )
     return resolve_token_path()
-
-
-def _cli_for(python: str | None) -> str:
-    if python:
-        return str(Path(python).resolve().parent / "huggingface-cli")
-    return sys.executable.replace("python", "huggingface-cli") if "python" in sys.executable else "huggingface-cli"
 
 
 def resolve_token_path() -> Path:

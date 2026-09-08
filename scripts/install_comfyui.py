@@ -189,7 +189,9 @@ class ComfyUIInstaller:
     # --------------------------------------------------------------- paso 7
     def download_models(self) -> None:
         print("\n[7/7] Descargando los 4 modelos fijos...")
-        cli = str(Path(self.venv_python).parent / "huggingface-cli")
+        from huggingface_setup import _find_huggingface_cli
+
+        cli_cmd = _find_huggingface_cli(str(self.venv_python))
         for spec in get_required_models():
             if spec.target_path.exists():
                 print(f"  [{spec.key}] ya presente. Saltando.")
@@ -198,7 +200,7 @@ class ComfyUIInstaller:
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
             self._run(
                 [
-                    cli,
+                    *cli_cmd,
                     "download",
                     spec.repo_id,
                     spec.filename,
