@@ -98,9 +98,12 @@ class Orchestrator:
         self._run_script("install_comfyui.py", *args)
 
     def install_toolkit(self) -> None:
-        print("\n[+] Instalando y configurando AI-Toolkit... (pendiente)")
-        # self._run_script("install_toolkit.py")
-        print("  Aún sin implementación.")
+        print("\n[+] Instalando y configurando AI-Toolkit...")
+        args = ["--root", str(Path.home() / "ai-toolkit")]
+        token = self._token()
+        if token:
+            args += ["--token", token]
+        self._run_script("install_toolkit.py", *args)
 
     def deploy_comfy(self) -> None:
         print("\n[+] Desplegando ComfyUI... (pendiente)")
