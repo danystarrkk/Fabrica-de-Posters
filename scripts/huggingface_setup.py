@@ -1,21 +1,13 @@
-"""Configuración de Hugging Face: instalación del cliente y persistencia segura del token.
+"""Configuración de Hugging Face: instalación del cliente a nivel de sistema y persistencia segura del token.
 
 Flux.2-dev es un modelo "gated" (requiere aceptar licencia/permisos), por lo
 que la única descarga oficial es a través del cliente de Hugging Face
 autenticado con un token (`HF_TOKEN`).
 
-Requisito preventivo (lo llamamos "paso preventivo"): antes de descargar los
-modelos, hay que:
-  1. Instalar el cliente `huggingface_hub` (provee `hf` / `huggingface-cli`).
-  2. Registrar el token de forma segura y persistente.
-
-El token se acepta de dos fuentes (en orden):
-  - Variable de entorno `HF_TOKEN`
-  - Argumento `--token`
-
-Se persiste mediante `huggingface_hub` en la ruta que la librería reconoce
-(~/.cache/huggingface/token o ~/.huggingface/token), con permisos 0600, para
-que las futuras descargas no vuelvan a pedirlo.
+Estrategia:
+  - Instalar `huggingface_hub` a nivel de sistema (pip install --user o global)
+  - Usar el comando `hf` (CLI moderno) para login y descargas
+  - El token se persiste en ~/.cache/huggingface/token (0600)
 """
 
 from __future__ import annotations
@@ -36,121 +28,55 @@ def get_token_from_env() -> str | None:
     return os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
 
 
-def _pip_cmd(python: str | None) -> list[str]:
-    """Devuelve el comando pip como lista de partes para subprocess."""
-    if python:
-        python_path = Path(python).resolve()
-        if not python_path.exists():
-            raise HuggingFaceSetupError(f"Python del venv no encontrado: {python_path}")
-        pip_path = python_path.parent / "pip"
-        if pip_path.exists():
-            return [str(pip_path)]
-        # Fallback: python -m pip
-        return [str(python_path), "-m", "pip"]
-    # Sin python específico: usar el pip del sistema actual
+def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    """Ejecuta comando y devuelve resultado."""
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if check and proc.returncode != 0:
+        raise HuggingFaceSetupError(f"Comando falló: {' '.join(cmd)}\n{proc.stderr.strip()}")
+    return proc
+
+
+def _pip_cmd() -> list[str]:
+    """Comando pip del sistema (usa el pip del python actual)."""
     return [sys.executable, "-m", "pip"]
 
 
-def _resolve_venv_bin(python: str | None, bin_name: str) -> Path | None:
-    """Resuelve la ruta a un binario dentro del venv, si python apunta al venv."""
-    if not python:
-        return None
-    try:
-        venv_bin = Path(python).resolve().parent / bin_name
-        return venv_bin if venv_bin.exists() else None
-    except (OSError, ValueError):
-        return None
-
-
-def _find_huggingface_cli(python: str | None) -> list[str]:
-    """Devuelve el comando para invocar huggingface-cli de forma robusta.
-
-    Orden de preferencia:
-      1. Binario directo en el venv (huggingface-cli) - LO QUE PIP INSTALA
-      2. python -m huggingface_hub (versiones nuevas con __main__)
-      3. python -m huggingface_hub.cli (versiones intermedias)
-    """
-    # 1. PRIORIDAD MÁXIMA: binario que pip instala en el venv
-    cli_path = _resolve_venv_bin(python, "huggingface-cli")
-    if cli_path:
-        return [str(cli_path)]
-
-    # Si tenemos python del venv, intentamos invocar el módulo de varias formas
-    if python:
-        # 2. Versiones nuevas: huggingface_hub tiene __main__
-        probe = subprocess.run(
-            [python, "-m", "huggingface_hub", "--help"],
-            capture_output=True,
-        )
-        if probe.returncode == 0:
-            return [python, "-m", "huggingface_hub"]
-
-        # 3. Versiones intermedias: huggingface_hub.cli como módulo ejecutable
-        probe = subprocess.run(
-            [python, "-m", "huggingface_hub.cli", "--help"],
-            capture_output=True,
-        )
-        if probe.returncode == 0:
-            return [python, "-m", "huggingface_hub.cli"]
-
-    # 4. Último recurso: confiar en PATH (solo si no hay venv)
-    if shutil.which("huggingface-cli"):
-        return ["huggingface-cli"]
-
-    raise HuggingFaceSetupError(
-        "No se encontró huggingface-cli. Asegúrate de instalar huggingface_hub en el venv."
-    )
-
-
-def install_huggingface_cli(python: str | None = None) -> None:
-    """Instala `huggingface_hub` con pip dentro del entorno indicado y verifica el binario."""
-    pip_cmd = _pip_cmd(python)
-    
-    # Forzar reinstalación para asegurar que los entry points se creen
-    proc = subprocess.run(
-        [*pip_cmd, "install", "--force-reinstall", "--no-deps", "huggingface_hub"],
-        capture_output=True,
-        text=True,
-    )
+def install_huggingface_cli() -> None:
+    """Instala `huggingface_hub` a nivel de sistema (--user para no requerir sudo)."""
+    # Primero intenta --user (no requiere root)
+    proc = _run([*_pip_cmd(), "install", "--upgrade", "--user", "huggingface_hub"], check=False)
     if proc.returncode != 0:
-        # Fallback: instalación normal si falla --force-reinstall
-        proc = subprocess.run(
-            [*pip_cmd, "install", "--upgrade", "huggingface_hub"],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
+        # Fallback: instalación global (puede requerir sudo en algunos sistemas)
+        proc = _run([*_pip_cmd(), "install", "--upgrade", "huggingface_hub"])
+    # Verificar que el comando `hf` quedó disponible en PATH
+    if not shutil.which("hf"):
+        # A veces --user instala en ~/.local/bin que no está en PATH
+        local_bin = Path.home() / ".local" / "bin"
+        if (local_bin / "hf").exists():
+            os.environ["PATH"] = f"{local_bin}{os.pathsep}{os.environ['PATH']}"
+        else:
             raise HuggingFaceSetupError(
-                f"Fallo instalando huggingface_hub: {proc.stderr.strip()}"
+                "huggingface_hub se instaló pero el comando 'hf' no está en PATH. "
+                "Asegúrate de que ~/.local/bin esté en tu PATH."
             )
-    
-    # VERIFICAR que el binario quedó creado en el venv
-    if python:
-        cli_path = _resolve_venv_bin(python, "huggingface-cli")
-        if not cli_path:
-            # Intentar regenerar entry points
-            subprocess.run(
-                [*pip_cmd, "install", "--force-reinstall", "huggingface_hub"],
-                capture_output=True,
-            )
-            cli_path = _resolve_venv_bin(python, "huggingface-cli")
-            if not cli_path:
-                raise HuggingFaceSetupError(
-                    "huggingface_hub se instaló pero NO se creó el binario huggingface-cli en el venv. "
-                    "Verifica que pip esté instalando en el venv correcto."
-                )
 
 
-def persist_token(token: str, python: str | None = None) -> Path:
-    """Guarda el token con `huggingface-cli login` (no pasa por shell, sin log).
+def _hf_cmd() -> list[str]:
+    """Devuelve el comando `hf` disponible en PATH."""
+    if shutil.which("hf"):
+        return ["hf"]
+    # Fallback a ~/.local/bin/hf
+    local_hf = Path.home() / ".local" / "bin" / "hf"
+    if local_hf.exists():
+        return [str(local_hf)]
+    raise HuggingFaceSetupError("Comando 'hf' no encontrado en PATH.")
 
-    Devuelve la ruta del archivo de token persistido.
-    Usa el flag `--add-to-git-credential` para que el token quede disponible
-    de forma transparente para `hf download` sin reautenticación.
-    """
-    cli_cmd = _find_huggingface_cli(python)
+
+def persist_token(token: str) -> Path:
+    """Guarda el token con `hf auth login` (no interactivo, sin log)."""
+    cmd = _hf_cmd()
     proc = subprocess.run(
-        [*cli_cmd, "login", "--token", token, "--add-to-git-credential"],
+        [*cmd, "auth", "login", "--token", token, "--add-to-git-credential"],
         capture_output=True,
         text=True,
     )
@@ -175,7 +101,7 @@ def ensure_secure_permissions(token_path: Path | None = None) -> None:
         token_path.chmod(0o600)
 
 
-def setup(token: str | None = None, python: str | None = None) -> Path:
+def setup(token: str | None = None) -> Path:
     """Pipeline preventivo completo: instala el cliente y persiste el token.
 
     Devuelve la ruta del token persistido. Lanza HuggingFaceSetupError si algo
@@ -188,8 +114,8 @@ def setup(token: str | None = None, python: str | None = None) -> Path:
             "entorno HF_TOKEN o pásalo con --token."
         )
 
-    install_huggingface_cli(python)
-    token_path = persist_token(token, python)
+    install_huggingface_cli()
+    token_path = persist_token(token)
     ensure_secure_permissions(token_path)
     return token_path
 
@@ -198,14 +124,13 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Instala el cliente HF y persiste el token de forma segura."
+        description="Instala el cliente HF (hf) y persiste el token de forma segura."
     )
     parser.add_argument("--token", type=str, default=None, help="Token de Hugging Face (o usa HF_TOKEN).")
-    parser.add_argument("--python", type=str, default=None, help="Python del venv (ruta al binario).")
     args = parser.parse_args()
 
     try:
-        token_path = setup(args.token, args.python)
+        token_path = setup(args.token)
         print(f"[OK] Token persistido de forma segura en: {token_path}")
     except HuggingFaceSetupError as e:
         print(f"[ERROR] {e}")

@@ -183,15 +183,15 @@ class ComfyUIInstaller:
                 "No se encontró HF_TOKEN. Define la variable o pásalo con --token. "
                 "Flux.2-dev es gated y requiere autenticación."
             )
-        token_path = hf.setup(self.token, str(self.venv_python))
+        token_path = hf.setup(self.token)
         print(f"  Token persistido en {token_path} (0600).")
 
     # --------------------------------------------------------------- paso 7
     def download_models(self) -> None:
         print("\n[7/7] Descargando los 4 modelos fijos...")
-        from huggingface_setup import _find_huggingface_cli
+        from huggingface_setup import _hf_cmd
 
-        cli_cmd = _find_huggingface_cli(str(self.venv_python))
+        hf_cmd = _hf_cmd()
         for spec in get_required_models():
             if spec.target_path.exists():
                 print(f"  [{spec.key}] ya presente. Saltando.")
@@ -200,9 +200,10 @@ class ComfyUIInstaller:
             print(f"  Descargando {spec.key}: {spec.repo_id}/{spec.filename}")
             self._run(
                 [
-                    *cli_cmd,
+                    *hf_cmd,
                     "download",
                     spec.repo_id,
+                    "--include",
                     spec.filename,
                     "--local-dir",
                     str(spec.target_dir),
