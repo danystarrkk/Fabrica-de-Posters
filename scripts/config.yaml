@@ -1,28 +1,13 @@
-import os
-import sys
-
-if len(sys.argv) != 4:
-    print("Uso incorrecto.")
-    print(
-        "Comando: python generar_config.py <trigger_word> <ruta_dataset> <ruta_salida>"
-    )
-    sys.exit(1)
-
-trigger_word = sys.argv[1]
-ruta_dataset = os.path.abspath(sys.argv[2])
-ruta_salida = os.path.abspath(sys.argv[3])
-nombre_proyecto = f"{trigger_word}_lora"
-
-yaml_content = f"""---
+---
 job: "extension"
 config:
-  name: "{nombre_proyecto}"
+  name: "hola_lora"
   process:
     - type: "diffusion_trainer"
-      training_folder: "{ruta_salida}"
+      training_folder: "/holasalida"
       sqlite_db_path: "./aitk_db.db"
       device: "cuda:0"
-      trigger_word: "{trigger_word}"
+      trigger_word: "hola"
       performance_log_every: 10
       network:
         type: "lora"
@@ -41,7 +26,7 @@ config:
         save_format: "diffusers"
         push_to_hub: false
       datasets:
-        - folder_path: "{ruta_dataset}"
+        - folder_path: "/hola"
           mask_path: null
           mask_min_value: 0.1
           default_caption: ""
@@ -123,11 +108,5 @@ config:
         num_frames: 1
         fps: 1
 meta:
-  name: "{nombre_proyecto}"
+  name: "hola_lora"
   version: "1.0"
-"""
-
-with open("config.yaml", "w", encoding="utf-8") as f:
-    f.write(yaml_content)
-
-print(f"\\n[ÉXITO] Archivo 'config.yaml' generado con la estructura estricta de la UI.")
