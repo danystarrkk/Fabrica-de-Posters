@@ -77,6 +77,21 @@ Let the reference prompts determine everything about the resulting prompt:
 - its visual storytelling
 - and any other characteristic present in the references
 
+Each generated prompt should explore a genuinely new visual
+idea and should avoid becoming too similar in concept to other
+generated prompts.
+
+Do not repeatedly generate variations of the same scene,
+subject, setting, composition, or central idea.
+
+Use the reference prompts as inspiration to discover new and
+unexpected possibilities rather than reproducing the same
+concept with minor changes.
+
+Prioritize novelty and creative exploration while remaining
+faithful to the characteristics learned from the reference
+prompts.
+
 Do not impose an external style definition.
 
 Do not impose characteristics that are not supported by the references.
