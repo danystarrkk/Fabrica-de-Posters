@@ -204,7 +204,7 @@ if "ask_ollama(args.model, generation_prompt, amount)" in text:
 if "build_generation_prompt(batch, amount)" in text:
     raise RuntimeError("Quedó una llamada antigua a build_generation_prompt.")
 
-out = Path("/mnt/data/generate_prompts_individual.py")
+out = Path("./")
 out.write_text(text, encoding="utf-8")
 
 # Validación de sintaxis.
