@@ -169,6 +169,13 @@ def parse_arguments():
         help=f"Reference TXT files per batch. Default: {FILES_PER_BATCH}",
     )
 
+    parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="Archivo TXT de registro. Por defecto: <output>.log",
+    )
+
     return parser.parse_args()
 
 
@@ -407,8 +414,65 @@ Return only the required JSON.
 
 
 # ============================================================
-# GUARDAR JSON
+# RECUPERACIÓN / REGISTRO
 # ============================================================
+
+
+def log_event(log_path: Path, message: str):
+    """Registra un evento persistente en un TXT."""
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {message}\n")
+
+
+def load_existing_prompts(output_path: Path):
+    """
+    Carga el JSON existente para continuar desde el último prompt guardado.
+
+    El archivo existente se considera válido únicamente si contiene una lista
+    'prompts' con objetos {id, prompt} consecutivos desde 1.
+    """
+    if not output_path.exists():
+        return []
+
+    try:
+        with output_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise RuntimeError(
+            f"Existe {output_path}, pero no se pudo leer como JSON válido: {e}"
+        )
+
+    if not isinstance(data, dict) or not isinstance(data.get("prompts"), list):
+        raise RuntimeError(
+            f"El archivo existente {output_path} no tiene una lista 'prompts'."
+        )
+
+    existing = []
+
+    for index, item in enumerate(data["prompts"], start=1):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{output_path}: elemento #{index} no es un objeto.")
+
+        prompt_id = item.get("id")
+        prompt_text = item.get("prompt")
+
+        if prompt_id != index:
+            raise RuntimeError(
+                f"{output_path}: se esperaba id={index}, pero se encontró id={prompt_id}."
+            )
+
+        if not isinstance(prompt_text, str) or not prompt_text.strip():
+            raise RuntimeError(
+                f"{output_path}: prompt #{index} está vacío o no es texto."
+            )
+
+        existing.append(prompt_text.strip())
+
+    return existing
 
 
 def save_json(output_path, prompts):
@@ -422,19 +486,19 @@ def save_json(output_path, prompts):
         ]
     }
 
-    # Escritura atómica:
-    # primero guardamos un archivo temporal y después lo
-    # reemplazamos. Así evitamos dejar un JSON corrupto.
-    temp_path = output_path.with_suffix(".tmp")
+    # Escritura atómica y sincronización en disco.
+    temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
 
-    temp_path.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    with temp_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+
+        try:
+            import os
+
+            os.fsync(f.fileno())
+        except OSError:
+            pass
 
     temp_path.replace(output_path)
 
@@ -456,6 +520,8 @@ def main():
         print("ERROR: files-per-batch must be greater than 0.")
         sys.exit(1)
 
+    log_path = args.log or args.output.with_suffix(".log")
+
     print("=" * 70)
     print("       T3CHGRNG PROMPT GENERATOR")
     print("=" * 70)
@@ -465,6 +531,9 @@ def main():
     print(f"Prompts wanted: {args.number}")
     print(f"Files/batch:    {args.files_per_batch}")
     print(f"Output:         {args.output}")
+    print(f"Log:            {log_path}")
+
+    log_event(log_path, f"START requested={args.number} output={args.output}")
 
     # --------------------------------------------------------
     # Cargar referencias
@@ -504,98 +573,195 @@ def main():
         )
 
     # --------------------------------------------------------
+    # Recuperar progreso existente
+    # --------------------------------------------------------
+
+    try:
+        all_prompts = load_existing_prompts(args.output)
+    except Exception as e:
+        print(f"\nERROR recuperando progreso: {e}")
+        log_event(log_path, f"RECOVERY_ERROR {e}")
+        sys.exit(1)
+
+    if len(all_prompts) > args.number:
+        print(
+            f"\nERROR: El archivo existente contiene "
+            f"{len(all_prompts)} prompts, pero se solicitaron {args.number}."
+        )
+        log_event(
+            log_path,
+            f"RECOVERY_ERROR existing={len(all_prompts)} requested={args.number}",
+        )
+        sys.exit(1)
+
+    if all_prompts:
+        print(f"\n✓ Progreso recuperado: " f"{len(all_prompts)}/{args.number}")
+
+        print(f"✓ El script continuará desde el prompt " f"{len(all_prompts) + 1}.")
+
+        log_event(
+            log_path, f"RESUME existing={len(all_prompts)} next={len(all_prompts) + 1}"
+        )
+
+    else:
+        print("\nNo existe progreso previo. Comenzando desde el prompt 1.")
+        log_event(log_path, "NEW_RUN starting=1")
+
+    if len(all_prompts) == args.number:
+        print("\n✓ Todos los prompts ya están generados.")
+        log_event(log_path, "COMPLETE already_exists=true")
+        return
+
+    # --------------------------------------------------------
     # Generación
     # --------------------------------------------------------
 
-    all_prompts = []
+    generated_before_run = len(all_prompts)
+    current_global_slot = 0
 
-    for batch_index, (batch, amount) in enumerate(
-        zip(batches, distribution),
-        start=1,
-    ):
+    try:
 
-        if amount == 0:
-            continue
+        for batch_index, (batch, amount) in enumerate(
+            zip(batches, distribution),
+            start=1,
+        ):
 
-        print("\n" + "=" * 70)
-        print(f"BATCH {batch_index}/{number_of_batches}")
-        print("=" * 70)
+            if amount == 0:
+                continue
 
-        print(f"\nReferences: " f"{batch[0]['name']} → {batch[-1]['name']}")
+            print("\n" + "=" * 70)
+            print(f"BATCH {batch_index}/{number_of_batches}")
+            print("=" * 70)
 
-        print(f"Prompts assigned to this batch: {amount}")
+            print(f"\nReferences: " f"{batch[0]['name']} → {batch[-1]['name']}")
 
-        # Cada prompt se genera mediante una llamada independiente.
-        # Las mismas referencias del batch se vuelven a enviar
-        # en cada llamada.
-        for prompt_number in range(1, amount + 1):
+            print(f"Prompts assigned to this batch: {amount}")
 
-            print("\n" + "-" * 70)
-            print(
-                f"Generating prompt "
-                f"{prompt_number}/{amount} "
-                f"in batch {batch_index}..."
-            )
-            print("-" * 70)
+            for prompt_number in range(1, amount + 1):
 
-            generation_prompt = build_generation_prompt(batch)
+                current_global_slot += 1
 
-            success = False
-            max_attempts = 3
+                # Ya existe en el JSON: no se vuelve a generar.
+                if current_global_slot <= len(all_prompts):
+                    print(f"\n✓ Prompt {current_global_slot} ya existe. " f"Se omite.")
+                    continue
 
-            for attempt in range(1, max_attempts + 1):
-
-                try:
-                    prompts = ask_ollama(
-                        args.model,
-                        generation_prompt,
-                    )
-
-                    if len(prompts) != 1:
-                        raise RuntimeError(
-                            f"Expected exactly 1 prompt, "
-                            f"but received {len(prompts)}."
-                        )
-
-                    success = True
-                    break
-
-                except Exception as e:
-
-                    print(f"\n  ERROR on attempt " f"{attempt}/{max_attempts}:")
-
-                    print(f"  {e}")
-
-                    if attempt < max_attempts:
-
-                        print("\n  Retrying in 3 seconds...")
-
-                        time.sleep(3)
-
-            if not success:
-
-                print("\nERROR: Could not generate this prompt.")
-
+                print("\n" + "-" * 70)
                 print(
-                    "Already generated prompts have been "
-                    "preserved in the output file."
+                    f"Generating prompt "
+                    f"{current_global_slot}/{args.number} "
+                    f"(batch {batch_index}, "
+                    f"{prompt_number}/{amount})..."
+                )
+                print("-" * 70)
+
+                log_event(
+                    log_path,
+                    f"GENERATING id={current_global_slot} "
+                    f"batch={batch_index} batch_position={prompt_number}/{amount}",
                 )
 
-                sys.exit(1)
+                generation_prompt = build_generation_prompt(batch)
 
-            # La respuesta contiene exactamente un prompt.
-            all_prompts.append(prompts[0])
+                success = False
+                max_attempts = 3
 
-            # Guardar inmediatamente después de cada prompt
-            # para no perder progreso si una llamada posterior falla.
-            save_json(
-                args.output,
-                all_prompts,
+                for attempt in range(1, max_attempts + 1):
+
+                    try:
+                        prompts = ask_ollama(
+                            args.model,
+                            generation_prompt,
+                        )
+
+                        if len(prompts) != 1:
+                            raise RuntimeError(
+                                f"Expected exactly 1 prompt, "
+                                f"but received {len(prompts)}."
+                            )
+
+                        success = True
+
+                        break
+
+                    except Exception as e:
+
+                        print(f"\n  ERROR on attempt " f"{attempt}/{max_attempts}:")
+
+                        print(f"  {e}")
+
+                        log_event(
+                            log_path,
+                            f"ERROR id={current_global_slot} "
+                            f"attempt={attempt}/{max_attempts} error={e}",
+                        )
+
+                        if attempt < max_attempts:
+
+                            print("\n  Retrying in 3 seconds...")
+
+                            time.sleep(3)
+
+                if not success:
+
+                    print("\nERROR: Could not generate this prompt.")
+
+                    print(
+                        "Already generated prompts have been "
+                        "preserved in the output file."
+                    )
+
+                    log_event(
+                        log_path,
+                        f"STOPPED id={current_global_slot} "
+                        f"reason=max_attempts_reached "
+                        f"progress={len(all_prompts)}/{args.number}",
+                    )
+
+                    sys.exit(1)
+
+                # ------------------------------------------------
+                # Guardar inmediatamente
+                # ------------------------------------------------
+
+                all_prompts.append(prompts[0])
+
+                save_json(
+                    args.output,
+                    all_prompts,
+                )
+
+                log_event(
+                    log_path,
+                    f"SUCCESS id={len(all_prompts)} "
+                    f"progress={len(all_prompts)}/{args.number}",
+                )
+
+                print(f"\n✓ Prompt generated: " f"{len(all_prompts)}/{args.number}")
+
+                print(f"✓ Saved: {args.output}")
+
+    except KeyboardInterrupt:
+
+        print("\n\n" + "=" * 70)
+        print("INTERRUPTED BY USER (Ctrl+C)")
+        print("=" * 70)
+
+        print(f"\n✓ Prompts safely stored: " f"{len(all_prompts)}/{args.number}")
+
+        if len(all_prompts) < args.number:
+            print(
+                f"✓ On next run it will continue from prompt "
+                f"{len(all_prompts) + 1}."
             )
 
-            print(f"\n✓ Prompt generated: " f"{len(all_prompts)}/{args.number}")
+        log_event(
+            log_path,
+            f"INTERRUPTED progress={len(all_prompts)}/{args.number} "
+            f"next={len(all_prompts) + 1 if len(all_prompts) < args.number else 'NONE'}",
+        )
 
-            print(f"✓ Saved: {args.output}")
+        return
 
     # --------------------------------------------------------
     # Resultado final
@@ -608,6 +774,14 @@ def main():
     print(f"\nTotal prompts generated: " f"{len(all_prompts)}")
 
     print(f"JSON saved to: " f"{args.output}")
+
+    print(f"Log saved to: " f"{log_path}")
+
+    log_event(
+        log_path,
+        f"COMPLETE generated_this_run={len(all_prompts) - generated_before_run} "
+        f"total={len(all_prompts)}",
+    )
 
     print()
 
