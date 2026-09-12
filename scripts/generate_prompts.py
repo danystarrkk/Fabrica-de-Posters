@@ -123,8 +123,7 @@ Return ONLY valid JSON using exactly this structure:
   ]
 }
 
-The number of strings in the "prompts" array MUST be exactly the
-number requested by the user.
+The "prompts" array MUST contain exactly ONE string.
 
 Do not return anything before or after the JSON object.
 """
@@ -368,7 +367,7 @@ def build_generation_prompt(batch):
     prompt = f"""
 {SYSTEM_INSTRUCTION}
 
-You must generate exactly {amount} original prompts.
+You must generate exactly ONE original prompt.
 
 The following {len(batch)} prompts are your reference material.
 
@@ -384,7 +383,7 @@ REFERENCE MATERIAL
 END REFERENCE MATERIAL
 ==============================
 
-Now generate exactly {amount} completely original prompts.
+Now generate exactly ONE completely original prompt.
 
 Remember:
 
