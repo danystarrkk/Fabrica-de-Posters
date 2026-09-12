@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import math
 import sys
 import time
 from pathlib import Path
@@ -24,7 +23,6 @@ FILES_PER_BATCH = 20
 DEFAULT_OUTPUT = "prompts.json"
 
 # Timeout de Ollama.
-# Puede tardar bastante dependiendo de la cantidad de texto.
 REQUEST_TIMEOUT = 3600
 
 
@@ -33,99 +31,83 @@ REQUEST_TIMEOUT = 3600
 # ============================================================
 
 SYSTEM_INSTRUCTION = r"""
-You are an expert visual prompt writer specialized in extremely
-detailed image-generation prompts.
+You are generating one original image-generation prompt.
 
 You will receive a collection of reference prompts.
 
-These reference prompts are examples of the writing style,
-descriptive density, structure, vocabulary, visual specificity,
-and level of detail that you must reproduce.
+These reference prompts are your ONLY reference and source of inspiration.
 
-Your task is to STUDY the reference prompts and then generate
-completely ORIGINAL prompts.
+Study ALL of the reference prompts carefully before generating.
 
-IMPORTANT:
+Your task is to create ONE completely new, original, innovative,
+and visually compelling prompt based on what you learn from the
+reference prompts.
 
-The reference prompts are examples of HOW to write the prompt,
-not content that should be copied.
+Do NOT copy or reproduce the content of the references.
 
-Do NOT:
-- copy sentences from the references
-- paraphrase an entire reference
-- reproduce the same scene
-- reproduce the same character
-- reproduce the same composition
-- simply combine elements from several references
-- repeatedly generate the same concept
-- mention the reference prompts in your output
+Do NOT copy sentences or distinctive phrases.
 
-Instead, infer the common characteristics of the references.
+Do NOT paraphrase any reference.
 
-Pay particular attention to:
+Do NOT reproduce the same scene, character, setting, composition,
+or concept from a reference.
 
-- descriptive density
-- overall prompt length
-- sentence structure
-- vocabulary
-- visual specificity
-- composition
-- camera/viewpoint description
-- subject description
-- environmental description
-- lighting
-- color palette
-- interaction between light and objects
-- materials
-- textures
-- architectural details
-- technological details
-- artistic techniques
-- atmosphere
-- mood
-- visual storytelling
-- small secondary details
-- relationship between foreground, subject and background
-- tactile qualities
-- artistic terminology
+Do NOT simply combine elements from multiple references.
 
-The generated prompts must have the same kind of rich,
-cinematic and highly descriptive writing demonstrated by the
-references.
+Instead, study the references as a whole and create something
+genuinely new that feels naturally related to them.
 
-Each prompt must describe a completely new scene.
+Let the reference prompts determine everything about the resulting prompt:
+- how it is written
+- how much it describes
+- how it is structured
+- its vocabulary
+- its level of detail
+- its visual language
+- its composition
+- its subjects
+- its environments
+- its lighting
+- its colors
+- its materials
+- its textures
+- its atmosphere
+- its mood
+- its artistic language
+- its visual storytelling
+- and any other characteristic present in the references
 
-The subject, environment, situation and visual composition
-should vary between generated prompts.
+Do not impose an external style definition.
 
-The prompts should feel like they belong to the same visual
-world and were written by the same author, while still being
-original.
+Do not impose characteristics that are not supported by the references.
 
-EVERY generated prompt MUST begin with exactly:
+The references are the authority.
+
+Create something new, striking, coherent, imaginative,
+and visually interesting while remaining faithful to
+what you learned from ALL of the reference prompts.
+
+EVERY generated prompt MUST begin exactly with:
 
 "t3chgrng style,"
-
-Do not add titles.
-
-Do not number the prompts inside the prompt text.
-
-Do not add explanations.
-
-Do not add markdown.
 
 Return ONLY valid JSON using exactly this structure:
 
 {
   "prompts": [
-    "t3chgrng style, ...",
     "t3chgrng style, ..."
   ]
 }
 
 The "prompts" array MUST contain exactly ONE string.
 
-Do not return anything before or after the JSON object.
+Do not add a title.
+
+Do not add explanations.
+
+Do not add markdown.
+
+Do not add anything before or after the JSON object.
 """
 
 
@@ -140,10 +122,16 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        "directory", type=Path, help="Directory containing the TXT reference files."
+        "directory",
+        type=Path,
+        help="Directory containing the TXT reference files.",
     )
 
-    parser.add_argument("number", type=int, help="Total number of prompts to generate.")
+    parser.add_argument(
+        "number",
+        type=int,
+        help="Total number of prompts to generate.",
+    )
 
     parser.add_argument(
         "-o",
@@ -154,7 +142,9 @@ def parse_arguments():
     )
 
     parser.add_argument(
-        "--model", default=MODEL, help=f"Ollama model. Default: {MODEL}"
+        "--model",
+        default=MODEL,
+        help=f"Ollama model. Default: {MODEL}",
     )
 
     parser.add_argument(
@@ -200,9 +190,11 @@ def load_txt_files(directory: Path):
     for index, file in enumerate(files, start=1):
         try:
             text = file.read_text(encoding="utf-8").strip()
+
         except UnicodeDecodeError:
             print(f"WARNING: Could not read UTF-8 file: {file}")
             continue
+
         except Exception as e:
             print(f"WARNING: Could not read {file}: {e}")
             continue
@@ -211,7 +203,12 @@ def load_txt_files(directory: Path):
             print(f"WARNING: Empty file skipped: {file}")
             continue
 
-        references.append({"name": file.name, "text": text})
+        references.append(
+            {
+                "name": file.name,
+                "text": text,
+            }
+        )
 
         print(f"  [{index:03d}] {file.name}")
 
@@ -294,16 +291,16 @@ def ask_ollama(model, prompt):
         "prompt": prompt,
         "stream": False,
         "format": "json",
-        "options": {
-            # Temperatura suficientemente alta para crear
-            # escenas originales.
-            "temperature": 0.9
-        },
+        "options": {"temperature": 0.9},
     }
 
     print(f"  Sending request to Ollama ({model})...")
 
-    response = requests.post(OLLAMA_URL, json=payload, timeout=REQUEST_TIMEOUT)
+    response = requests.post(
+        OLLAMA_URL,
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+    )
 
     response.raise_for_status()
 
@@ -316,6 +313,7 @@ def ask_ollama(model, prompt):
 
     try:
         result = json.loads(raw_response)
+
     except json.JSONDecodeError as e:
         raise RuntimeError(
             f"Ollama returned invalid JSON: {e}\n\n"
@@ -367,11 +365,7 @@ def build_generation_prompt(batch):
     prompt = f"""
 {SYSTEM_INSTRUCTION}
 
-You must generate exactly ONE original prompt.
-
-The following {len(batch)} prompts are your reference material.
-
-Study ALL of them before generating anything.
+Here are the reference prompts:
 
 ==============================
 REFERENCE MATERIAL
@@ -383,17 +377,15 @@ REFERENCE MATERIAL
 END REFERENCE MATERIAL
 ==============================
 
-Now generate exactly ONE completely original prompt.
+Generate ONE completely new, original, innovative,
+and visually compelling prompt based on your study
+of ALL the reference prompts.
 
-Remember:
+Use the references as the sole basis for deciding
+how the generated prompt should be written and what
+kind of visual result it should produce.
 
-1. Learn the writing style from ALL references.
-2. Preserve the same descriptive richness and depth.
-3. Preserve the same kind of visual specificity.
-4. Create completely new scenes.
-5. Do not copy distinctive content from the references.
-6. Every prompt must begin with "t3chgrng style,"
-7. Return ONLY the requested JSON structure.
+Return only the required JSON.
 """
 
     return prompt
@@ -407,7 +399,10 @@ Remember:
 def save_json(output_path, prompts):
     data = {
         "prompts": [
-            {"id": index, "prompt": prompt}
+            {
+                "id": index,
+                "prompt": prompt,
+            }
             for index, prompt in enumerate(prompts, start=1)
         ]
     }
@@ -418,7 +413,12 @@ def save_json(output_path, prompts):
     temp_path = output_path.with_suffix(".tmp")
 
     temp_path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
     temp_path.replace(output_path)
@@ -474,7 +474,10 @@ def main():
     # Distribuir cantidad de prompts
     # --------------------------------------------------------
 
-    distribution = distribute_prompts(args.number, number_of_batches)
+    distribution = distribute_prompts(
+        args.number,
+        number_of_batches,
+    )
 
     print("\nPrompt distribution:")
 
@@ -491,7 +494,10 @@ def main():
 
     all_prompts = []
 
-    for batch_index, (batch, amount) in enumerate(zip(batches, distribution), start=1):
+    for batch_index, (batch, amount) in enumerate(
+        zip(batches, distribution),
+        start=1,
+    ):
 
         if amount == 0:
             continue
@@ -501,15 +507,19 @@ def main():
         print("=" * 70)
 
         print(f"\nReferences: " f"{batch[0]['name']} → {batch[-1]['name']}")
+
         print(f"Prompts assigned to this batch: {amount}")
 
-        # Cada prompt se genera mediante una llamada independiente a Ollama.
-        # Las mismas referencias del batch se vuelven a enviar en cada llamada.
+        # Cada prompt se genera mediante una llamada independiente.
+        # Las mismas referencias del batch se vuelven a enviar
+        # en cada llamada.
         for prompt_number in range(1, amount + 1):
 
             print("\n" + "-" * 70)
             print(
-                f"Generating prompt {prompt_number}/{amount} in batch {batch_index}..."
+                f"Generating prompt "
+                f"{prompt_number}/{amount} "
+                f"in batch {batch_index}..."
             )
             print("-" * 70)
 
@@ -519,39 +529,57 @@ def main():
             max_attempts = 3
 
             for attempt in range(1, max_attempts + 1):
+
                 try:
-                    prompts = ask_ollama(args.model, generation_prompt)
+                    prompts = ask_ollama(
+                        args.model,
+                        generation_prompt,
+                    )
+
                     if len(prompts) != 1:
                         raise RuntimeError(
-                            f"Expected exactly 1 prompt, but received {len(prompts)}."
+                            f"Expected exactly 1 prompt, "
+                            f"but received {len(prompts)}."
                         )
+
                     success = True
                     break
 
                 except Exception as e:
-                    print(f"\n  ERROR on attempt {attempt}/{max_attempts}:")
+
+                    print(f"\n  ERROR on attempt " f"{attempt}/{max_attempts}:")
+
                     print(f"  {e}")
 
                     if attempt < max_attempts:
+
                         print("\n  Retrying in 3 seconds...")
+
                         time.sleep(3)
 
             if not success:
+
                 print("\nERROR: Could not generate this prompt.")
+
                 print(
                     "Already generated prompts have been "
                     "preserved in the output file."
                 )
+
                 sys.exit(1)
 
             # La respuesta contiene exactamente un prompt.
             all_prompts.append(prompts[0])
 
-            # Guardar inmediatamente después de cada prompt para no perder
-            # el progreso si una llamada posterior falla.
-            save_json(args.output, all_prompts)
+            # Guardar inmediatamente después de cada prompt
+            # para no perder progreso si una llamada posterior falla.
+            save_json(
+                args.output,
+                all_prompts,
+            )
 
-            print(f"\n✓ Prompt generated: {len(all_prompts)}/{args.number}")
+            print(f"\n✓ Prompt generated: " f"{len(all_prompts)}/{args.number}")
+
             print(f"✓ Saved: {args.output}")
 
     # --------------------------------------------------------
